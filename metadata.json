@@ -1,0 +1,6 @@
+{
+  "name": "FocusGuard",
+  "description": "Local self-control and adult content blocking tool for Android.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

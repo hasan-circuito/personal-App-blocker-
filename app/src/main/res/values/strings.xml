@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">FocusGuard</string>
+    <string name="accessibility_service_label">FocusGuard Monitoring Service</string>
+    <string name="accessibility_service_description">Monitors selected applications locally for adult content and enforces automated lockouts for personal self-control.</string>
+</resources>

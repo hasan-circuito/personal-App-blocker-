@@ -42,7 +42,8 @@ import java.util.Locale
 object VisualDiagnosticPipeline {
 
     private const val TAG = "VisualGuard"
-    private const val TIMER_SAMPLING_INTERVAL_MS = 2500L // Periodic sampling timer (every 2.5s)
+    const val NORMAL_SAMPLING_INTERVAL_MS = 2500L // Periodic sampling timer (every 2.5s)
+    const val FAST_SAMPLING_INTERVAL_MS = 1000L   // Post-seek fast re-sampling timer (every 1.0s)
     private const val MAX_OBSERVATION_WINDOW = 6
     private const val CONFIRMATION_TIME_WINDOW_MS = 8000L // 8 seconds temporal window
     private const val REQUIRED_HIGH_RISK_COUNT = 3
@@ -53,12 +54,19 @@ object VisualDiagnosticPipeline {
     private val pipelineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var timerSamplingJob: Job? = null
 
+    // Adaptive Sampling State
+    @Volatile
+    private var fastSamplingCountdown = 0
+
+    private val _isFastSamplingActive = MutableStateFlow(false)
+    val isFastSamplingActive: StateFlow<Boolean> = _isFastSamplingActive.asStateFlow()
+
     // Pipeline Active State (Default: True)
     private val _isDiagnosticActive = MutableStateFlow(true)
     val isDiagnosticActive: StateFlow<Boolean> = _isDiagnosticActive.asStateFlow()
 
     enum class VisualInterventionMode {
-        VISUAL_TEST_MODE, // Intercepts media viewing screen & restricts channel context without app lockout
+        VISUAL_TEST_MODE, // Diagnostic logging only (No automatic video dismissal or lockout)
         FULL_LOCKOUT      // Full application lockout (preserved intact for future use)
     }
 
@@ -86,7 +94,7 @@ object VisualDiagnosticPipeline {
     private val _interventionBridgeStatus = MutableStateFlow("CONNECTED")
     val interventionBridgeStatus: StateFlow<String> = _interventionBridgeStatus.asStateFlow()
 
-    private val _interventionStatus = MutableStateFlow("WAITING") // WAITING, INTERCEPTED, TRIGGERED, BLOCKED, DISABLED
+    private val _interventionStatus = MutableStateFlow("DIAGNOSTIC_ONLY") // DIAGNOSTIC_ONLY, WAITING, INTERCEPTED, TRIGGERED, BLOCKED, DISABLED
     val interventionStatus: StateFlow<String> = _interventionStatus.asStateFlow()
 
     private val _lastResult = MutableStateFlow<VisualClassificationResult?>(null)
@@ -280,29 +288,50 @@ scanner=RUNNING (Timer-Driven Sampling Active)
             """.trimIndent())
         }
 
-        // Ensure timer loop is actively capturing frames every 2.5s
+        // Ensure timer loop is actively capturing frames
         startTimerSampling(service, packageName)
 
         // Also do immediate capture if enough time passed
         val now = System.currentTimeMillis()
-        if (now - lastSampleTimestamp >= TIMER_SAMPLING_INTERVAL_MS) {
+        val currentInterval = if (fastSamplingCountdown > 0) FAST_SAMPLING_INTERVAL_MS else NORMAL_SAMPLING_INTERVAL_MS
+        if (now - lastSampleTimestamp >= currentInterval) {
             lastSampleTimestamp = now
             captureSingleScreenshot(service, packageName, rootNode)
         }
+    }
+
+    /**
+     * Triggers temporary fast re-sampling (every ~1.0s) immediately after seek, video open, or control event.
+     */
+    fun triggerFastResampling(reason: String = "SEEK_OR_TRANSITION") {
+        fastSamplingCountdown = 3 // Next 3 samples at fast rate (~1.0s)
+        _isFastSamplingActive.value = true
+        logVisualGuard("Switched to FAST sampling mode (~1.0s): $reason")
+        Log.i(TAG, "Fast sampling activated: $reason")
     }
 
     private fun startTimerSampling(service: AccessibilityService, packageName: String) {
         if (timerSamplingJob?.isActive == true) return
 
         timerSamplingJob = pipelineScope.launch {
-            Log.i(TAG, "Starting Timer-Driven Sampling Loop (every ${TIMER_SAMPLING_INTERVAL_MS}ms) for $packageName")
+            Log.i(TAG, "Starting Adaptive Timer-Driven Sampling Loop for $packageName")
             while (isActive && _isDiagnosticActive.value && _mediaStateDetected.value) {
-                delay(TIMER_SAMPLING_INTERVAL_MS)
+                val interval = if (fastSamplingCountdown > 0) {
+                    fastSamplingCountdown--
+                    _isFastSamplingActive.value = true
+                    FAST_SAMPLING_INTERVAL_MS
+                } else {
+                    _isFastSamplingActive.value = false
+                    NORMAL_SAMPLING_INTERVAL_MS
+                }
+
+                delay(interval)
                 if (!_isDiagnosticActive.value || !_mediaStateDetected.value) break
 
                 val activeSvc = currentActiveService ?: service
                 captureSingleScreenshot(activeSvc, packageName, null)
             }
+            _isFastSamplingActive.value = false
             Log.i(TAG, "Timer-Driven Sampling Loop stopped.")
         }
     }

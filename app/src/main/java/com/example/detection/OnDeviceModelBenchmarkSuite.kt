@@ -89,6 +89,7 @@ object OnDeviceModelBenchmarkSuite {
         val neutralProb: Float,
         val pornProb: Float,
         val sexyProb: Float,
+        val diagnosticCombinedScore: Float = (pornProb + (sexyProb * 0.85f)).coerceIn(0f, 1f),
         val primaryClass: String,
         val derivedRiskScore: Float,
         val mappedClassification: VisualClassification,
@@ -140,6 +141,21 @@ object OnDeviceModelBenchmarkSuite {
         val diagnosticSummary: String
     )
 
+    data class VideoSessionEvidenceSummary(
+        val totalFrames: Int = 0,
+        val totalStableFrames: Int = 0,
+        val transitionFrames: Int = 0,
+        val loadingFrames: Int = 0,
+        val playerControlsFrames: Int = 0,
+        val highRiskStableFrames: Int = 0,
+        val reviewStableFrames: Int = 0,
+        val safeStableFrames: Int = 0,
+        val highRiskRatio: Float = 0f,
+        val videoRiskLevel: String = "SAFE",
+        val isStickyHighRisk: Boolean = false,
+        val activeSamplingMode: String = "Normal (2.5s)"
+    )
+
     data class RealFrameSample(
         val sessionId: String,
         val frameId: Long,
@@ -151,10 +167,15 @@ object OnDeviceModelBenchmarkSuite {
         val isDuplicate: Boolean,
         val groundTruthCategory: RealWorldCategory,
         val thumbnailBitmap: Bitmap?,
+        val stabilityState: TelegramVideoRegionCropper.FrameStabilityState = TelegramVideoRegionCropper.FrameStabilityState.STABLE,
         val candidateARaw: CandidateARawOutput,
         val candidateBRaw: CandidateBRawOutput,
         val heuristicRaw: HeuristicRawOutput,
         val temporalState: TemporalEvidenceState,
+        val diagnosticCombinedScore: Float = candidateARaw.diagnosticCombinedScore,
+        val frameRisk: VisualClassification = candidateARaw.mappedClassification,
+        val videoRiskLevel: String = "SAFE",
+        val sessionHighRiskRatio: Float = 0f,
         val candidateALatencyMs: Long,
         val candidateBLatencyMs: Long,
         val heuristicLatencyMs: Long
@@ -226,6 +247,33 @@ object OnDeviceModelBenchmarkSuite {
 
     private val _activeReport = MutableStateFlow<ComprehensiveBenchmarkReport?>(null)
     val activeReport: StateFlow<ComprehensiveBenchmarkReport?> = _activeReport.asStateFlow()
+
+    private val _videoSessionEvidence = MutableStateFlow(VideoSessionEvidenceSummary())
+    val videoSessionEvidence: StateFlow<VideoSessionEvidenceSummary> = _videoSessionEvidence.asStateFlow()
+
+    @Volatile
+    private var lastObservedPHash: Long = 0L
+
+    @Volatile
+    private var sessionTotalFrames = 0
+    @Volatile
+    private var sessionStableFrames = 0
+    @Volatile
+    private var sessionTransitionFrames = 0
+    @Volatile
+    private var sessionLoadingFrames = 0
+    @Volatile
+    private var sessionPlayerControlsFrames = 0
+    @Volatile
+    private var sessionHighRiskStableFrames = 0
+    @Volatile
+    private var sessionReviewStableFrames = 0
+    @Volatile
+    private var sessionSafeStableFrames = 0
+    @Volatile
+    private var isStickyHighRiskActive = false
+    @Volatile
+    private var consecutiveSafeStableFrames = 0
 
     // --- Verified Model Specifications ---
     val CANDIDATE_A_SPEC = ModelMetadata(
@@ -315,6 +363,18 @@ object OnDeviceModelBenchmarkSuite {
             _latestFrameSample.value = null
             _latestTemporalEvidence.value = null
             frameIdCounter.set(1L)
+            sessionTotalFrames = 0
+            sessionStableFrames = 0
+            sessionTransitionFrames = 0
+            sessionLoadingFrames = 0
+            sessionPlayerControlsFrames = 0
+            sessionHighRiskStableFrames = 0
+            sessionReviewStableFrames = 0
+            sessionSafeStableFrames = 0
+            isStickyHighRiskActive = false
+            consecutiveSafeStableFrames = 0
+            lastObservedPHash = 0L
+            _videoSessionEvidence.value = VideoSessionEvidenceSummary()
         }
     }
 
@@ -338,6 +398,20 @@ object OnDeviceModelBenchmarkSuite {
             val classifier = OnDeviceVisualContentClassifier()
             val pHash = classifier.computePerceptualHash(bitmap)
             val pHashHex = String.format(Locale.US, "%016X", pHash)
+
+            // Analyze Frame Stability: STABLE vs LOADING vs PLAYER_CONTROLS vs TRANSITION
+            val stabilityState = TelegramVideoRegionCropper.analyzeFrameStability(
+                fullScreenshot = bitmap,
+                rootNode = null,
+                lastFrameHash = lastObservedPHash,
+                currentFrameHash = pHash
+            )
+            lastObservedPHash = pHash
+
+            // Trigger temporary fast re-sampling if transition/seek/controls detected
+            if (stabilityState != TelegramVideoRegionCropper.FrameStabilityState.STABLE) {
+                VisualDiagnosticPipeline.triggerFastResampling("UNSTABLE_${stabilityState.name}")
+            }
 
             // Check duplicate state
             val isDuplicate = synchronized(ephemeralSessionFrames) {
@@ -380,6 +454,9 @@ object OnDeviceModelBenchmarkSuite {
             val pDrawing = candidateAResult.drawing
             val pHentai = candidateAResult.hentai
 
+            // Diagnostic Combined Score = Porn + Sexy * 0.85 (Telemetry Only - Not for Blocking)
+            val diagCombined = (pPorn + (pSexy * 0.85f)).coerceIn(0f, 1f)
+
             val primaryClassA = when {
                 pPorn >= max(pSexy, max(pNeutral, max(pDrawing, pHentai))) -> "Porn"
                 pSexy >= max(pNeutral, max(pDrawing, pHentai)) -> "Sexy"
@@ -388,6 +465,7 @@ object OnDeviceModelBenchmarkSuite {
                 else -> "Hentai"
             }
 
+            // Frame-Level Risk Mapping (Transition/Loading frames do not form strong standalone triggers)
             val mappedA = when {
                 pPorn >= 0.70f || (pPorn + 0.5f * pSexy >= 0.65f) -> VisualClassification.HIGH_RISK
                 pSexy >= 0.50f || pPorn >= 0.35f -> VisualClassification.REVIEW
@@ -400,6 +478,7 @@ object OnDeviceModelBenchmarkSuite {
                 neutralProb = pNeutral,
                 pornProb = pPorn,
                 sexyProb = pSexy,
+                diagnosticCombinedScore = diagCombined,
                 primaryClass = primaryClassA,
                 derivedRiskScore = max(pPorn, pHentai),
                 mappedClassification = mappedA,
@@ -445,6 +524,75 @@ object OnDeviceModelBenchmarkSuite {
             val temporalState = calculateTemporalEvidence(timestamp, candidateARaw.pornProb, candidateARaw.sexyProb)
             _latestTemporalEvidence.value = temporalState
 
+            // TASK 5: Update Video-Session Level Evidence & Sticky High-Risk State
+            sessionTotalFrames++
+            if (stabilityState == TelegramVideoRegionCropper.FrameStabilityState.STABLE) {
+                sessionStableFrames++
+                when (mappedA) {
+                    VisualClassification.HIGH_RISK -> {
+                        sessionHighRiskStableFrames++
+                        consecutiveSafeStableFrames = 0
+                    }
+                    VisualClassification.REVIEW -> {
+                        sessionReviewStableFrames++
+                        consecutiveSafeStableFrames = 0
+                    }
+                    VisualClassification.SAFE -> {
+                        sessionSafeStableFrames++
+                        if (pPorn < 0.10f && pSexy < 0.20f) {
+                            consecutiveSafeStableFrames++
+                        }
+                    }
+                }
+            } else {
+                when (stabilityState) {
+                    TelegramVideoRegionCropper.FrameStabilityState.LOADING -> sessionLoadingFrames++
+                    TelegramVideoRegionCropper.FrameStabilityState.PLAYER_CONTROLS -> sessionPlayerControlsFrames++
+                    else -> sessionTransitionFrames++
+                }
+            }
+
+            val sessionHighRiskRatio = if (sessionStableFrames > 0) {
+                sessionHighRiskStableFrames.toFloat() / sessionStableFrames
+            } else 0f
+
+            // Multi-Factor Sticky Video Risk Determination
+            val videoRisk: String
+            if (isStickyHighRiskActive) {
+                if (consecutiveSafeStableFrames >= 6) {
+                    isStickyHighRiskActive = false
+                    videoRisk = "SAFE"
+                } else {
+                    videoRisk = "CONFIRMED_HIGH_RISK"
+                }
+            } else {
+                if ((sessionHighRiskStableFrames >= 3 && sessionHighRiskRatio >= 0.35f && sessionStableFrames >= 4) ||
+                    (sessionStableFrames >= 3 && temporalState.isConfirmedRisk)) {
+                    isStickyHighRiskActive = true
+                    videoRisk = "CONFIRMED_HIGH_RISK"
+                } else if (sessionReviewStableFrames >= 2 || sessionHighRiskStableFrames in 1..2) {
+                    videoRisk = "REVIEW"
+                } else {
+                    videoRisk = "SAFE"
+                }
+            }
+
+            val evidenceSummary = VideoSessionEvidenceSummary(
+                totalFrames = sessionTotalFrames,
+                totalStableFrames = sessionStableFrames,
+                transitionFrames = sessionTransitionFrames,
+                loadingFrames = sessionLoadingFrames,
+                playerControlsFrames = sessionPlayerControlsFrames,
+                highRiskStableFrames = sessionHighRiskStableFrames,
+                reviewStableFrames = sessionReviewFrames(),
+                safeStableFrames = sessionSafeStableFrames,
+                highRiskRatio = sessionHighRiskRatio,
+                videoRiskLevel = videoRisk,
+                isStickyHighRisk = isStickyHighRiskActive,
+                activeSamplingMode = if (VisualDiagnosticPipeline.isFastSamplingActive.value) "Fast (1.0s Post-Seek)" else "Normal (2.5s)"
+            )
+            _videoSessionEvidence.value = evidenceSummary
+
             val sample = RealFrameSample(
                 sessionId = currentSessionId,
                 frameId = frameId,
@@ -456,17 +604,22 @@ object OnDeviceModelBenchmarkSuite {
                 isDuplicate = isDuplicate,
                 groundTruthCategory = category,
                 thumbnailBitmap = thumbnail,
+                stabilityState = stabilityState,
                 candidateARaw = candidateARaw,
                 candidateBRaw = candidateBRaw,
                 heuristicRaw = heuristicRaw,
                 temporalState = temporalState,
+                diagnosticCombinedScore = diagCombined,
+                frameRisk = mappedA,
+                videoRiskLevel = videoRisk,
+                sessionHighRiskRatio = sessionHighRiskRatio,
                 candidateALatencyMs = aLatency,
                 candidateBLatencyMs = bLatency,
                 heuristicLatencyMs = hLatency
             )
 
             synchronized(ephemeralSessionFrames) {
-                if (ephemeralSessionFrames.size >= 40) {
+                if (ephemeralSessionFrames.size >= 60) {
                     val old = ephemeralSessionFrames.removeAt(0)
                     old.thumbnailBitmap?.let { if (!it.isRecycled) it.recycle() }
                 }
@@ -476,11 +629,11 @@ object OnDeviceModelBenchmarkSuite {
             }
 
             Log.i(TAG, """
-[REAL_FRAME_RAW_PROVENANCE]
-SessionId=$currentSessionId, FrameId=$frameId, Timestamp=$timestamp, pHash=$pHashHex
-InputDimensions=${inputWidth}x${inputHeight}, Crop=${cropResult.cropDescription}, Duplicate=$isDuplicate
-CandidateA -> Porn=${"%.3f".format(candidateARaw.pornProb)}, Sexy=${"%.3f".format(candidateARaw.sexyProb)}, Neutral=${"%.3f".format(candidateARaw.neutralProb)}, Hentai=${"%.3f".format(candidateARaw.hentaiProb)}, Drawing=${"%.3f".format(candidateARaw.drawingProb)}
-TemporalEvidence -> WindowFrames=${temporalState.framesInWindow}, MaxPorn=${"%.3f".format(temporalState.maxPornScore)}, MaxSexy=${"%.3f".format(temporalState.maxSexyScore)}, AccumulationScore=${"%.3f".format(temporalState.temporalAccumulationScore)} => Confirmed=${temporalState.isConfirmedRisk}
+[FRAME_EVALUATION]
+SessionId=$currentSessionId | FrameId=$frameId | Timestamp=$timestamp | State=${stabilityState.name}
+Probabilities -> Neutral=${"%.3f".format(pNeutral)} | Porn=${"%.3f".format(pPorn)} | Sexy=${"%.3f".format(pSexy)} | Hentai=${"%.3f".format(pHentai)} | Drawing=${"%.3f".format(pDrawing)}
+DiagnosticCombined(Porn+0.85*Sexy)=${"%.3f".format(diagCombined)} [Telemetry Only]
+Verdict -> FrameRisk=$mappedA | VideoRisk=$videoRisk | HighRiskRatio=$sessionHighRiskStableFrames/$sessionStableFrames (${"%.1f".format(sessionHighRiskRatio * 100)}%) | Sampling=${evidenceSummary.activeSamplingMode}
             """.trimIndent())
 
             recalculateSessionReport()
@@ -489,6 +642,8 @@ TemporalEvidence -> WindowFrames=${temporalState.framesInWindow}, MaxPorn=${"%.3
             Log.e(TAG, "Error ingesting real Telegram frame into raw diagnostic buffer", e)
         }
     }
+
+    private fun sessionReviewFrames(): Int = sessionReviewStableFrames
 
     /**
      * Evaluates Candidate A (MobileNetV2-NSFW) with full raw softmax tensor exposure.

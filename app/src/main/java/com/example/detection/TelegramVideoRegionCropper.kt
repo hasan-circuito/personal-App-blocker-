@@ -148,6 +148,113 @@ object TelegramVideoRegionCropper {
         }
     }
 
+    enum class FrameStabilityState(val code: String, val displayName: String) {
+        STABLE("STABLE", "Stable Video"),
+        TRANSITION("TRANS", "Transition / Seek"),
+        LOADING("LOAD", "Loading / Buffer"),
+        PLAYER_CONTROLS("CTRLS", "Player Controls Overlay")
+    }
+
+    /**
+     * Analyzes whether a captured frame is STABLE, LOADING, PLAYER_CONTROLS, or TRANSITION.
+     * Prevents seek artifacts or loading screens from corrupting evidence.
+     */
+    fun analyzeFrameStability(
+        fullScreenshot: Bitmap,
+        rootNode: android.view.accessibility.AccessibilityNodeInfo? = null,
+        lastFrameHash: Long = 0L,
+        currentFrameHash: Long = 0L
+    ): FrameStabilityState {
+        val w = fullScreenshot.width
+        val h = fullScreenshot.height
+
+        if (w < 50 || h < 50) return FrameStabilityState.LOADING
+
+        // 1. Accessibility Node check for player controls
+        if (rootNode != null) {
+            val nodeTextList = mutableListOf<String>()
+            extractNodeControlHints(rootNode, nodeTextList)
+            val hasControlsText = nodeTextList.any { text ->
+                val lower = text.lowercase()
+                lower.contains("seek") || lower.contains("pause") || lower.contains("play") ||
+                        lower.contains("replay") || lower.contains("buffering") || lower.contains("0:")
+            }
+            if (hasControlsText) {
+                return FrameStabilityState.PLAYER_CONTROLS
+            }
+        }
+
+        // 2. Fast sampling of pixel luminance and distribution
+        val sampleStep = max(16, min(w, h) / 32)
+        var totalLuma = 0L
+        var sampleCount = 0
+        var darkPixelCount = 0
+        var bottomScrubberLumaSum = 0L
+        var bottomScrubberSampleCount = 0
+
+        val bottomScrubberYStart = (h * 0.85f).toInt()
+
+        for (y in 0 until h step sampleStep) {
+            for (x in 0 until w step sampleStep) {
+                val pixel = fullScreenshot.getPixel(x, y)
+                val r = Color.red(pixel)
+                val g = Color.green(pixel)
+                val b = Color.blue(pixel)
+                val luma = (0.299 * r + 0.587 * g + 0.114 * b).toInt()
+
+                totalLuma += luma
+                sampleCount++
+                if (luma < 20) darkPixelCount++
+
+                if (y >= bottomScrubberYStart) {
+                    bottomScrubberLumaSum += luma
+                    bottomScrubberSampleCount++
+                }
+            }
+        }
+
+        if (sampleCount == 0) return FrameStabilityState.LOADING
+
+        val avgLuma = totalLuma.toFloat() / sampleCount
+        val darkRatio = darkPixelCount.toFloat() / sampleCount
+
+        // 3. Detect LOADING (Pitch black buffer / blank frame / dark loading state)
+        if (avgLuma < 16f || darkRatio > 0.94f) {
+            return FrameStabilityState.LOADING
+        }
+
+        // 4. Detect PLAYER_CONTROLS (Scrubber overlay / high contrast bar at bottom while center is playing)
+        if (bottomScrubberSampleCount > 0) {
+            val bottomAvgLuma = bottomScrubberLumaSum.toFloat() / bottomScrubberSampleCount
+            // In Telegram, active controls create a prominent bottom overlay with scrubber line
+            if (bottomAvgLuma < 30f && avgLuma in 45f..180f && darkRatio in 0.30f..0.65f) {
+                // Potential player control overlay active
+                return FrameStabilityState.PLAYER_CONTROLS
+            }
+        }
+
+        // 5. Detect TRANSITION (Large hash delta / seek jump)
+        if (lastFrameHash != 0L && currentFrameHash != 0L) {
+            val bitDiff = java.lang.Long.bitCount(lastFrameHash xor currentFrameHash)
+            if (bitDiff > 42) {
+                // Very abrupt visual hash divergence (rapid skip / scrub action)
+                return FrameStabilityState.TRANSITION
+            }
+        }
+
+        return FrameStabilityState.STABLE
+    }
+
+    private fun extractNodeControlHints(node: android.view.accessibility.AccessibilityNodeInfo, list: MutableList<String>) {
+        node.text?.let { list.add(it.toString()) }
+        node.contentDescription?.let { list.add(it.toString()) }
+        for (i in 0 until min(node.childCount, 6)) {
+            val child = node.getChild(i) ?: continue
+            extractNodeControlHints(child, list)
+            child.recycle()
+        }
+    }
+
     /**
      * Resizes the cropped bitmap to target 224x224 while strictly preserving the aspect ratio
      * using letterboxing/pillarboxing (black pad) instead of stretching distortion.

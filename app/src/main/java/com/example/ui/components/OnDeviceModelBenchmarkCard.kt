@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.detection.OnDeviceModelBenchmarkSuite
+import com.example.detection.TelegramVideoRegionCropper
 import com.example.detection.VisualClassification
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -69,6 +70,7 @@ fun OnDeviceModelBenchmarkCard() {
     val collectedFrameCount by OnDeviceModelBenchmarkSuite.collectedFrameCount.collectAsStateWithLifecycle()
     val latestFrame by OnDeviceModelBenchmarkSuite.latestFrameSample.collectAsStateWithLifecycle()
     val latestTemporalState by OnDeviceModelBenchmarkSuite.latestTemporalEvidence.collectAsStateWithLifecycle()
+    val videoSessionEvidence by OnDeviceModelBenchmarkSuite.videoSessionEvidence.collectAsStateWithLifecycle()
     val isBenchmarkRunning by OnDeviceModelBenchmarkSuite.isBenchmarkRunning.collectAsStateWithLifecycle()
     val benchmarkProgress by OnDeviceModelBenchmarkSuite.benchmarkProgress.collectAsStateWithLifecycle()
     val report by OnDeviceModelBenchmarkSuite.activeReport.collectAsStateWithLifecycle()
@@ -99,13 +101,13 @@ fun OnDeviceModelBenchmarkCard() {
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "Candidate A Primary Detector & Diagnostics [REAL MODEL INFERENCE]",
+                            text = "On-Device Neural AI Inspector (MobileNetV2)",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
                         )
                         Text(
-                            text = "Real Neural Weights • No Simulation • Video Cropping • 5-8s Rolling Temporal Consensus",
+                            text = "TensorFlow Lite Engine • Live Softmax Probabilities • Video Region Cropping",
                             fontSize = 11.sp,
                             color = Color(0xFFD8B4FE)
                         )
@@ -174,14 +176,13 @@ fun OnDeviceModelBenchmarkCard() {
                     }
 
                     val metaA = com.example.detection.RealOnDeviceInferenceEngine.getCandidateAMetadata()
-                    val metaB = com.example.detection.RealOnDeviceInferenceEngine.getCandidateBMetadata()
 
                     Text(
-                        text = "• Candidate A: ${metaA.modelFileName} | ${metaA.inputShape} -> ${metaA.outputShape}\n  SHA-256: ${metaA.sha256Checksum.take(16)}... (Native Interpreter Active)\n• Candidate B: ${metaB.modelFileName} | ${metaB.inputShape} -> ${metaB.outputShape}\n  SHA-256: ${metaB.sha256Checksum.take(16)}... (Native ONNX Session Active)",
+                        text = "• Production Model: ${metaA.modelFileName} | Input: ${metaA.inputShape} -> Output: ${metaA.outputShape}\n  Tensor Index: [0:Draw, 1:Hent, 2:Neut, 3:Porn, 4:Sexy]\n  SHA-256: ${metaA.sha256Checksum.take(16)}... (Native TensorFlow Lite C++ Engine Active)",
                         fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace,
                         color = Color(0xFFCBD5E1),
-                        lineHeight = 13.sp
+                        lineHeight = 14.sp
                     )
                 }
             }
@@ -322,11 +323,77 @@ fun OnDeviceModelBenchmarkCard() {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "• Ingests 1 frame every 2.5s via background timer while Telegram video is active.\n• Automatic Video Cropping removes UI chrome to reveal full body/torso features.\n• Pure volatile RAM storage — zero disk, zero network.",
+                        text = "• Ingests 1 frame every 2.5s (adaptive 1.0s fast re-sampling after seek/controls) while Telegram video is active.\n• Automatic Video Cropping removes UI chrome to reveal full body/torso features.\n• Pure volatile RAM storage — zero disk, zero network.",
                         fontSize = 10.sp,
                         color = Color(0xFF94A3B8),
                         lineHeight = 14.sp
                     )
+
+                    // Video Session Evidence Summary Card
+                    if (videoSessionEvidence.totalFrames > 0) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1B4B)),
+                            border = BorderStroke(1.dp, if (videoSessionEvidence.isStickyHighRisk) Color(0xFFEF4444) else Color(0xFF6366F1))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "VIDEO-SESSION EVIDENCE STATUS",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFA5B4FC)
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = when {
+                                            videoSessionEvidence.videoRiskLevel.contains("HIGH_RISK") -> Color(0xFFEF4444)
+                                            videoSessionEvidence.videoRiskLevel.contains("REVIEW") -> Color(0xFFF59E0B)
+                                            else -> Color(0xFF10B981)
+                                        }
+                                    ) {
+                                        Text(
+                                            text = videoSessionEvidence.videoRiskLevel,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    TensorClassPill("Total Captured", videoSessionEvidence.totalFrames.toFloat(), Color(0xFF38BDF8))
+                                    TensorClassPill("Stable Video", videoSessionEvidence.totalStableFrames.toFloat(), Color(0xFF10B981))
+                                    TensorClassPill("Seek/Overlay/Blank", (videoSessionEvidence.transitionFrames + videoSessionEvidence.loadingFrames + videoSessionEvidence.playerControlsFrames).toFloat(), Color(0xFF94A3B8))
+                                    TensorClassPill("High Risk Stable", videoSessionEvidence.highRiskStableFrames.toFloat(), Color(0xFFEF4444))
+                                    TensorClassPill("HR Ratio", videoSessionEvidence.highRiskRatio, Color(0xFFA855F7), isHighlight = true)
+                                }
+
+                                Text(
+                                    text = "Sampling: ${videoSessionEvidence.activeSamplingMode} • Sticky Status: ${if (videoSessionEvidence.isStickyHighRisk) "STICKY HIGH RISK (Sustained through seeks/transitions)" else "Normal"}",
+                                    fontSize = 8.sp,
+                                    color = Color(0xFFCBD5E1)
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -454,19 +521,13 @@ fun OnDeviceModelBenchmarkCard() {
                             color = if (frame.temporalState.isConfirmedRisk) Color(0xFFEF4444) else Color(0xFF34D399)
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Divider(color = Color(0xFF334155))
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // RAW DETECTIONS FOR CANDIDATE B (REFERENCE ONLY)
-                        Text(
-                            text = "CANDIDATE B (NudeNet YOLO-Nano) — REFERENCE DETECTIONS ONLY:",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFFBBF24)
-                        )
+                        // PRODUCTION MODEL CONFIDENCE SUMMARY
                         Spacer(modifier = Modifier.height(4.dp))
-                        RawDetectionsTableB(frame.candidateBRaw)
+                        Text(
+                            text = "Model Architecture: MobileNetV2 • 5-Class Softmax • Zero Cloud Dependency",
+                            fontSize = 8.sp,
+                            color = Color(0xFF94A3B8)
+                        )
                     }
                 }
             }
@@ -728,36 +789,65 @@ private fun SessionFramesRawTableCard(samples: List<OnDeviceModelBenchmarkSuite.
                         modifier = Modifier.background(Color(0xFF1E293B), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        TableCell("Frame", 40.dp, isHeader = true)
-                        TableCell("GT Cat", 48.dp, isHeader = true)
-                        TableCell("A Porn", 50.dp, isHeader = true)
-                        TableCell("A Sexy", 50.dp, isHeader = true)
-                        TableCell("A Hent", 50.dp, isHeader = true)
-                        TableCell("A Neut", 50.dp, isHeader = true)
-                        TableCell("A Mapped", 65.dp, isHeader = true)
-                        TableCell("B Genitalia", 65.dp, isHeader = true)
-                        TableCell("B Breasts", 55.dp, isHeader = true)
-                        TableCell("B Mapped", 65.dp, isHeader = true)
-                        TableCell("Heuristic", 60.dp, isHeader = true)
+                        TableCell("Frame", 36.dp, isHeader = true)
+                        TableCell("State", 56.dp, isHeader = true)
+                        TableCell("Neutral", 48.dp, isHeader = true)
+                        TableCell("Porn", 46.dp, isHeader = true)
+                        TableCell("Sexy", 46.dp, isHeader = true)
+                        TableCell("Hentai", 46.dp, isHeader = true)
+                        TableCell("Draw", 42.dp, isHeader = true)
+                        TableCell("P+0.85S", 50.dp, isHeader = true)
+                        TableCell("Frame Risk", 85.dp, isHeader = true)
+                        TableCell("Video Risk", 110.dp, isHeader = true)
+                        TableCell("HR Ratio", 55.dp, isHeader = true)
                     }
 
                     samples.forEach { s ->
                         Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            TableCell("#${s.frameId}", 40.dp, isMonospace = true)
-                            TableCell("[${s.groundTruthCategory.code}]", 48.dp, color = if (s.groundTruthCategory.isGroundTruthExplicit) Color(0xFFF87171) else Color(0xFF34D399))
-                            TableCell("%.3f".format(s.candidateARaw.pornProb), 50.dp, isMonospace = true, color = if (s.candidateARaw.pornProb >= 0.70f) Color(0xFFEF4444) else Color.White)
-                            TableCell("%.3f".format(s.candidateARaw.sexyProb), 50.dp, isMonospace = true)
-                            TableCell("%.3f".format(s.candidateARaw.hentaiProb), 50.dp, isMonospace = true)
-                            TableCell("%.3f".format(s.candidateARaw.neutralProb), 50.dp, isMonospace = true, color = if (s.candidateARaw.neutralProb >= 0.70f) Color(0xFF10B981) else Color.White)
-                            TableCell(s.candidateARaw.mappedClassification.name, 65.dp, color = classificationColor(s.candidateARaw.mappedClassification))
-                            TableCell("%.3f".format(s.candidateBRaw.maxExposedGenitaliaScore), 65.dp, isMonospace = true, color = if (s.candidateBRaw.maxExposedGenitaliaScore >= 0.65f) Color(0xFFEF4444) else Color.White)
-                            TableCell("%.3f".format(s.candidateBRaw.maxExposedBreastsScore), 55.dp, isMonospace = true)
-                            TableCell(s.candidateBRaw.mappedClassification.name, 65.dp, color = classificationColor(s.candidateBRaw.mappedClassification))
-                            TableCell(s.heuristicRaw.mappedClassification.name, 60.dp, color = classificationColor(s.heuristicRaw.mappedClassification))
+                            TableCell("#${s.frameId}", 36.dp, isMonospace = true)
+                            TableCell(
+                                text = s.stabilityState.name.take(6),
+                                width = 56.dp,
+                                color = when (s.stabilityState) {
+                                    TelegramVideoRegionCropper.FrameStabilityState.STABLE -> Color(0xFF10B981)
+                                    TelegramVideoRegionCropper.FrameStabilityState.PLAYER_CONTROLS -> Color(0xFFF59E0B)
+                                    TelegramVideoRegionCropper.FrameStabilityState.LOADING -> Color(0xFF38BDF8)
+                                    TelegramVideoRegionCropper.FrameStabilityState.TRANSITION -> Color(0xFF94A3B8)
+                                },
+                                isMonospace = true
+                            )
+                            TableCell("%.3f".format(s.candidateARaw.neutralProb), 48.dp, isMonospace = true, color = if (s.candidateARaw.neutralProb >= 0.70f) Color(0xFF10B981) else Color.White)
+                            TableCell("%.3f".format(s.candidateARaw.pornProb), 46.dp, isMonospace = true, color = if (s.candidateARaw.pornProb >= 0.70f) Color(0xFFEF4444) else if (s.candidateARaw.pornProb >= 0.35f) Color(0xFFF59E0B) else Color.White)
+                            TableCell("%.3f".format(s.candidateARaw.sexyProb), 46.dp, isMonospace = true, color = if (s.candidateARaw.sexyProb >= 0.50f) Color(0xFFF59E0B) else Color.White)
+                            TableCell("%.3f".format(s.candidateARaw.hentaiProb), 46.dp, isMonospace = true)
+                            TableCell("%.3f".format(s.candidateARaw.drawingProb), 42.dp, isMonospace = true)
+                            TableCell("%.3f".format(s.diagnosticCombinedScore), 50.dp, isMonospace = true, color = Color(0xFFA855F7))
+                            TableCell(
+                                text = s.frameRisk.name,
+                                width = 85.dp,
+                                color = classificationColor(s.frameRisk),
+                                isMonospace = true
+                            )
+                            TableCell(
+                                text = s.videoRiskLevel,
+                                width = 110.dp,
+                                color = when {
+                                    s.videoRiskLevel.contains("HIGH_RISK") -> Color(0xFFEF4444)
+                                    s.videoRiskLevel.contains("REVIEW") -> Color(0xFFF59E0B)
+                                    else -> Color(0xFF10B981)
+                                },
+                                isMonospace = true
+                            )
+                            TableCell(
+                                text = "${"%.1f".format(s.sessionHighRiskRatio * 100)}%",
+                                width = 55.dp,
+                                isMonospace = true,
+                                color = Color(0xFFE2E8F0)
+                            )
                         }
                     }
                 }
@@ -821,30 +911,28 @@ private fun ModelSpecCard(report: OnDeviceModelBenchmarkSuite.ComprehensiveBench
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text("Specification", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8), modifier = Modifier.weight(1.3f))
-                Text("Candidate A", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF34D399), modifier = Modifier.weight(1.3f))
-                Text("Candidate B", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFBBF24), modifier = Modifier.weight(1.3f))
+                Text("Production Model (Candidate A)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF34D399), modifier = Modifier.weight(2f))
             }
 
-            SpecRow("Architecture", "MobileNetV2 (1.0 depth)", "YOLO-Nano (Anchor-free)")
-            SpecRow("Tensor Index Order", "[0:Draw, 1:Hent, 2:Neut, 3:Porn, 4:Sexy]", "8 Anatomical labels")
-            SpecRow("Input Resolution", "224 x 224 x 3 RGB (Cropped)", "320 x 320 x 3 RGB")
-            SpecRow("Normalization", "[-1.0, 1.0] (pixel/127.5-1)", "[0.0, 1.0] (pixel/255.0)")
-            SpecRow("Model Disk Size", "2.45 MB (INT8 Quantized)", "4.10 MB (INT8 Quantized)")
-            SpecRow("Output Tensor", "5-Class Softmax Probabilities", "Anchor-Free BBox + Scores")
-            SpecRow("Inference Engine", "LiteRT / TFLite 2.14+", "ONNX Runtime / LiteRT")
+            SpecRow2("Architecture", "MobileNetV2 (1.0 depth, Pre-trained on NSFW dataset)")
+            SpecRow2("Tensor Index Order", "[0: Drawing, 1: Hentai, 2: Neutral, 3: Porn, 4: Sexy]")
+            SpecRow2("Input Resolution", "224 x 224 x 3 RGB (Cropped from Telegram Media)")
+            SpecRow2("Normalization", "[-1.0, 1.0] (Formula: pixel / 127.5 - 1.0)")
+            SpecRow2("Model Asset Size", "24.4 MB (Full Precision FP32 Weights in APK)")
+            SpecRow2("Output Tensor", "5-Class Softmax Probabilities (Float32 Array)")
+            SpecRow2("Inference Engine", "TensorFlow Lite Native C++ Interpreter (libtensorflowlite_jni.so)")
         }
     }
 }
 
 @Composable
-private fun SpecRow(label: String, valA: String, valB: String) {
+private fun SpecRow2(label: String, valA: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(label, fontSize = 9.sp, color = Color(0xFF94A3B8), modifier = Modifier.weight(1.3f))
-        Text(valA, fontSize = 9.sp, color = Color(0xFFE2E8F0), modifier = Modifier.weight(1.3f))
-        Text(valB, fontSize = 9.sp, color = Color(0xFFE2E8F0), modifier = Modifier.weight(1.3f))
+        Text(label, fontSize = 9.sp, color = Color(0xFF94A3B8), modifier = Modifier.weight(1.2f))
+        Text(valA, fontSize = 9.sp, color = Color(0xFFE2E8F0), modifier = Modifier.weight(2f))
     }
 }
 
@@ -870,31 +958,29 @@ private fun HardwareMetricsCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text("Hardware Metric", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8), modifier = Modifier.weight(1.3f))
-                Text("System 1", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), modifier = Modifier.weight(1f))
-                Text("System 2 (A)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF34D399), modifier = Modifier.weight(1.2f))
-                Text("System 3 (B)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFBBF24), modifier = Modifier.weight(1.2f))
+                Text("Text Heuristic", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), modifier = Modifier.weight(1.2f))
+                Text("Production Model (A)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF34D399), modifier = Modifier.weight(1.5f))
             }
 
-            SpecRow3("Warm P50 Latency", "${heuristic.warmLatencyP50Ms} ms", "${candidateA.warmLatencyP50Ms} ms", "${candidateB.warmLatencyP50Ms} ms")
-            SpecRow3("Warm P95 Latency", "${heuristic.warmLatencyP95Ms} ms", "${candidateA.warmLatencyP95Ms} ms", "${candidateB.warmLatencyP95Ms} ms")
-            SpecRow3("Cold Start / Init", "${heuristic.initTimeMs} ms", "${candidateA.initTimeMs} ms", "${candidateB.initTimeMs} ms")
-            SpecRow3("RAM Delta", "+${heuristic.ramDeltaMb} MB", "+${candidateA.ramDeltaMb} MB", "+${candidateB.ramDeltaMb} MB")
-            SpecRow3("CPU Usage", "${heuristic.cpuLoadPercent}%", "${candidateA.cpuLoadPercent}%", "${candidateB.cpuLoadPercent}%")
-            SpecRow3("Battery / hr", heuristic.batteryImpactPerHour, candidateA.batteryImpactPerHour, candidateB.batteryImpactPerHour)
+            SpecRow2Cols("Warm P50 Latency", "${heuristic.warmLatencyP50Ms} ms", "${candidateA.warmLatencyP50Ms} ms")
+            SpecRow2Cols("Warm P95 Latency", "${heuristic.warmLatencyP95Ms} ms", "${candidateA.warmLatencyP95Ms} ms")
+            SpecRow2Cols("Cold Start / Init", "${heuristic.initTimeMs} ms", "${candidateA.initTimeMs} ms")
+            SpecRow2Cols("RAM Delta", "+${heuristic.ramDeltaMb} MB", "+${candidateA.ramDeltaMb} MB")
+            SpecRow2Cols("CPU Usage", "${heuristic.cpuLoadPercent}%", "${candidateA.cpuLoadPercent}%")
+            SpecRow2Cols("Battery / hr", heuristic.batteryImpactPerHour, candidateA.batteryImpactPerHour)
         }
     }
 }
 
 @Composable
-private fun SpecRow3(label: String, val1: String, val2: String, val3: String) {
+private fun SpecRow2Cols(label: String, val1: String, val2: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(label, fontSize = 9.sp, color = Color(0xFF94A3B8), modifier = Modifier.weight(1.3f))
-        Text(val1, fontSize = 9.sp, color = Color(0xFF38BDF8), modifier = Modifier.weight(1f))
-        Text(val2, fontSize = 9.sp, color = Color(0xFF34D399), modifier = Modifier.weight(1.2f))
-        Text(val3, fontSize = 9.sp, color = Color(0xFFFBBF24), modifier = Modifier.weight(1.2f))
+        Text(val1, fontSize = 9.sp, color = Color(0xFF38BDF8), modifier = Modifier.weight(1.2f))
+        Text(val2, fontSize = 9.sp, color = Color(0xFF34D399), modifier = Modifier.weight(1.5f))
     }
 }
 
@@ -919,22 +1005,21 @@ private fun EmpiricalMetricsCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Metric", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8), modifier = Modifier.weight(1.3f))
-                Text("Heuristic", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), modifier = Modifier.weight(1f))
-                Text("Cand A", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF34D399), modifier = Modifier.weight(1f))
-                Text("Cand B", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFBBF24), modifier = Modifier.weight(1f))
+                Text("Accuracy Metric", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8), modifier = Modifier.weight(1.3f))
+                Text("Heuristic", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF38BDF8), modifier = Modifier.weight(1.2f))
+                Text("Production Model (A)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF34D399), modifier = Modifier.weight(1.5f))
             }
 
-            SpecRow3("Total Frames", "${heuristic.totalFrames}", "${candidateA.totalFrames}", "${candidateB.totalFrames}")
-            SpecRow3("True Positives (TP)", "${heuristic.truePositives}", "${candidateA.truePositives}", "${candidateB.truePositives}")
-            SpecRow3("True Negatives (TN)", "${heuristic.trueNegatives}", "${candidateA.trueNegatives}", "${candidateB.trueNegatives}")
-            SpecRow3("False Positives (FP)", "${heuristic.falsePositives}", "${candidateA.falsePositives}", "${candidateB.falsePositives}")
-            SpecRow3("False Negatives (FN)", "${heuristic.falseNegatives}", "${candidateA.falseNegatives}", "${candidateB.falseNegatives}")
-            SpecRow3("Recall (Explicit)", "${(heuristic.recall * 100).toInt()}%", "${(candidateA.recall * 100).toInt()}%", "${(candidateB.recall * 100).toInt()}%")
-            SpecRow3("Precision", "${(heuristic.precision * 100).toInt()}%", "${(candidateA.precision * 100).toInt()}%", "${(candidateB.precision * 100).toInt()}%")
-            SpecRow3("False Positive Rate", "${(heuristic.falsePositiveRate * 100).toInt()}%", "${(candidateA.falsePositiveRate * 100).toInt()}%", "${(candidateB.falsePositiveRate * 100).toInt()}%")
-            SpecRow3("False Negative Rate", "${(heuristic.falseNegativeRate * 100).toInt()}%", "${(candidateA.falseNegativeRate * 100).toInt()}%", "${(candidateB.falseNegativeRate * 100).toInt()}%")
-            SpecRow3("Overall Accuracy", "${(heuristic.accuracy * 100).toInt()}%", "${(candidateA.accuracy * 100).toInt()}%", "${(candidateB.accuracy * 100).toInt()}%")
+            SpecRow2Cols("Total Frames", "${heuristic.totalFrames}", "${candidateA.totalFrames}")
+            SpecRow2Cols("True Positives (TP)", "${heuristic.truePositives}", "${candidateA.truePositives}")
+            SpecRow2Cols("True Negatives (TN)", "${heuristic.trueNegatives}", "${candidateA.trueNegatives}")
+            SpecRow2Cols("False Positives (FP)", "${heuristic.falsePositives}", "${candidateA.falsePositives}")
+            SpecRow2Cols("False Negatives (FN)", "${heuristic.falseNegatives}", "${candidateA.falseNegatives}")
+            SpecRow2Cols("Recall (Explicit)", "${(heuristic.recall * 100).toInt()}%", "${(candidateA.recall * 100).toInt()}%")
+            SpecRow2Cols("Precision", "${(heuristic.precision * 100).toInt()}%", "${(candidateA.precision * 100).toInt()}%")
+            SpecRow2Cols("False Positive Rate", "${(heuristic.falsePositiveRate * 100).toInt()}%", "${(candidateA.falsePositiveRate * 100).toInt()}%")
+            SpecRow2Cols("False Negative Rate", "${(heuristic.falseNegativeRate * 100).toInt()}%", "${(candidateA.falseNegativeRate * 100).toInt()}%")
+            SpecRow2Cols("Overall Accuracy", "${(heuristic.accuracy * 100).toInt()}%", "${(candidateA.accuracy * 100).toInt()}%")
         }
     }
 }
